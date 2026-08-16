@@ -1,0 +1,26 @@
+# Signing keys -- NEVER commit these
+mok.key
+mok.pub
+*.key
+*.der
+*.pem
+
+# Kernel build output
+*.o
+*.ko
+*.mod
+*.mod.c
+*.mod.o
+*.symvers
+*.order
+.*.cmd
+.tmp_versions/
+Module.symvers
+modules.order
+
+# iasl / mkaml intermediates
+kpws.aml
+kpws_method.aml
+kpws_method.dsl
+*.dsl
+*.dat
