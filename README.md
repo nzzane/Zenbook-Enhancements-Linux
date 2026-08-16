@@ -119,7 +119,7 @@ Set the backlight to level 1 (Fn+F3 / the brightness keys) and look at it.
 ### 5. Make it permanent
 
 ```bash
-echo "options asus_kbd_pwkb duty=0,10,170,255" | sudo tee /etc/modprobe.d/asus-kbd-pwkb.conf
+echo "options asus_kbd_pwkb duty=0,10,45,140" | sudo tee /etc/modprobe.d/asus-kbd-pwkb.conf
 echo asus_kbd_pwkb | sudo tee /etc/modules-load.d/asus_kbd_pwkb.conf
 ```
 
@@ -148,10 +148,19 @@ sudo rmmod asus_kbd_pwkb                       # back to 00 55 aa ff
 sudo modprobe asus_kbd_pwkb duty=0,20,170,255  # 0x14, less aggressive
 ```
 
-`0x0A` is the value in use here. If your LED driver can't strike that low (the
-backlight flickers, or just stays dark at level 1), step up: `20`, then `32`.
-Nothing stops you from remapping the other levels too — e.g.
-`duty=0,10,64,160` gives a much gentler top end.
+`0x0A` is the value in use here for level 1. If your LED driver can't strike
+that low (the backlight flickers, or just stays dark at level 1), step up:
+`20`, then `32`.
+
+Stock jumps from 33% straight to 67% and 100%, which is a cliff once level 1 is
+down at 4%. Remapping the upper levels too gives a ramp that's roughly even to
+the eye:
+
+```
+duty=0,10,45,140     # 0% / 3.9% / 17.6% / 54.9%   <- in use here
+duty=0,10,45,180     # same, brighter top end for daylight
+duty=0,10,64,160     # gentler dim end, gentler top end
+```
 
 Once you've picked values, put them in `/etc/modprobe.d/asus-kbd-pwkb.conf` as
 shown above.
