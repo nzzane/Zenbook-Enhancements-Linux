@@ -1,4 +1,6 @@
 # Zenbook Keyboard Brightness Adjust (Linux)
+You used AI: Yes, because I ain't digging that deep for keyboard control, but boy did Claude.
+Works pretty well, can finally use the laptop in a dim room....
 
 Make the ASUS Zenbook keyboard backlight **actually dim** on Linux — with
 Secure Boot and kernel lockdown left enabled.
