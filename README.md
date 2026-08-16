@@ -1,7 +1,9 @@
-# asus-kbd-pwkb
+# Zenbook Keyboard Brightness Adjust (Linux)
 
-Make the lowest keyboard-backlight level on ASUS laptops **actually dim**, with
+Make the ASUS Zenbook keyboard backlight **actually dim** on Linux — with
 Secure Boot and kernel lockdown left enabled.
+
+The kernel module is called `asus_kbd_pwkb`.
 
 On the ASUS Zenbook S 14 (UX5406SA) the firmware only exposes 4 backlight
 levels, and level 1 — the dimmest non-off setting — is 33% PWM duty. In a dark
@@ -28,29 +30,60 @@ all of it.
 level 1: 0x55 (33% duty)  ->  0x0A (3.9% duty)
 ```
 
-## Status
+## Will it work on my machine?
 
-Working on:
-
-| | |
-|---|---|
-| Laptop | ASUS Zenbook S 14 UX5406SA (BIOS UX5406SA.309) |
-| Kernel | 7.1.8-200.fc44.x86_64 (Fedora 44) |
-| Secure Boot | enabled |
-| Lockdown | `integrity` |
-
-It should work on any ASUS machine whose DSDT has `\_SB.PC00.LPCB.EC0.PWKB`
-as a `Buffer(4)` plus the `SLKB`/`GLKB` methods. **Check yours first:**
+Run the checker. It only reads — it dumps your DSDT, disassembles it, and looks
+for the three things the module needs:
 
 ```bash
-sudo dnf install acpica-tools          # or: apt install acpica-tools
+sudo dnf install acpica-tools      # or: sudo apt install acpica-tools
+sudo ./check-compat.sh
+```
+
+```
+ACPI table
+  [ ok ] found PWKB at \_SB.PC00.LPCB.EC0.PWKB
+  [ ok ] PWKB is a Buffer(4): 0x00 0x55 0xAA 0xFF
+  [ ok ] found SLKB at \_SB.PC00.LPCB.EC0.SLKB
+  [ ok ] found GLKB at \_SB.PC00.LPCB.EC0.GLKB
+  [ ok ] path matches the module default -- no source edit needed
+
+Verdict
+  COMPATIBLE -- follow the README as written.
+```
+
+What it's checking, and what each answer means for you:
+
+| Requirement | If it's missing |
+|---|---|
+| `PWKB` — a `Buffer(4)` of PWM duty values | **Dead end.** Your firmware doesn't drive the backlight from a duty table, and nothing here applies. |
+| `SLKB` — the method that applies a level by indexing `PWKB` | **Dead end.** Nothing would push the new values to the EC. |
+| `GLKB` — reads the current level | Works fine; load with `relevel=0..3` instead of the default `relevel=-1`. |
+| The ACPI path matches `\_SB.PC00.LPCB.EC0` | Works fine, but edit `EC_PATH` in `asus_kbd_pwkb.c` and both paths in `kpws.asl`, then `make aml`. The checker prints your actual path. |
+
+The checker also flags a level 1 that's already dim (nothing to gain), missing
+kernel headers, missing DKMS, and whether Secure Boot means you'll need to
+enroll a MOK.
+
+It ends with a paste-ready block for a compatibility report — **please open an
+issue with it either way**, working or not. That's how the table below grows.
+
+### Tested hardware
+
+| Model | BIOS | Kernel | PWKB path | Result |
+|---|---|---|---|---|
+| ASUS Zenbook S 14 UX5406SA | UX5406SA.309 | 7.1.8-200.fc44 (Fedora 44) | `\_SB.PC00.LPCB.EC0` | works, Secure Boot on, lockdown `integrity` |
+
+Any ASUS machine whose DSDT has a `PWKB` `Buffer(4)` plus `SLKB`/`GLKB` should
+work — this is EC firmware structure, not a per-model driver, so it is not
+limited to Zenbooks. It just hasn't been confirmed anywhere else yet.
+
+If you'd rather look by hand than run the script:
+
+```bash
 sudo acpidump -b -n DSDT -o dsdt.dat && iasl -d dsdt.dat
 grep -n -B2 -A6 'PWKB\|SLKB\|GLKB' dsdt.dsl
 ```
-
-If the ACPI path differs on your model, edit `EC_PATH` in `asus_kbd_pwkb.c` and
-the two paths in `kpws.asl`, then regenerate the AML (see
-[Regenerating the AML](#regenerating-the-aml)).
 
 ## Requirements
 
@@ -61,8 +94,8 @@ sudo dnf install kernel-devel-$(uname -r) gcc make elfutils-libelf-devel dkms mo
 sudo apt install linux-headers-$(uname -r) build-essential dkms mokutil openssl
 ```
 
-`acpica-tools` (for `iasl`) and `python3` are only needed if you regenerate the
-AML.
+`acpica-tools` (for `iasl` and `acpidump`) is needed by `check-compat.sh`, and
+with `python3` also to regenerate the AML.
 
 ## Install
 
@@ -101,7 +134,7 @@ enter the one-time password → **Reboot**. This is the only reboot required.
 ### 4. Build and load
 
 ```bash
-cd asus-kbd-pwkb
+cd Zenbook-Keyboard-brightness-adjust-linux
 sudo dkms add . && sudo dkms install asus-kbd-pwkb/0.1
 sudo modprobe asus_kbd_pwkb
 sudo dmesg | tail -3
@@ -226,6 +259,7 @@ Source layout:
 | `Makefile` | kbuild + `make aml` |
 | `dkms.conf` | DKMS packaging |
 | `ca.cnf` | openssl config for the MOK signing cert |
+| `check-compat.sh` | read-only DSDT compatibility checker |
 
 ### Regenerating the AML
 
