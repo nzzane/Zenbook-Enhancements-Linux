@@ -16,19 +16,21 @@
  * How it works, using only exported ACPICA APIs that carry no lockdown hook:
  *   1. acpi_evaluate_object() on the PWKB Name node -> read + save the
  *      original 4-byte buffer.
- *   2. acpi_install_method() with a 89-byte SSDT that contains exactly one
+ *   2. acpi_load_table() with a 89-byte SSDT that contains exactly one
  *      DefMethod, \_SB.PC00.LPCB.EC0.KPWS(Arg0), whose body is
  *          CopyObject (Arg0, \_SB.PC00.LPCB.EC0.PWKB)
  *          Return (Zero)
- *      ACPICA doc for acpi_install_method(): "Install a control method into
- *      the namespace. If the method name already exists in the namespace, it
- *      is overwritten. The input buffer must contain a valid DSDT or SSDT
- *      containing a single control method."
+ *      This goes through the normal table loader (same path as the
+ *      configfs/acpi table loader), not acpi_install_method(): since
+ *      ACPICA 20260408 (Linux 7.2) acpi_install_method() fails with
+ *      AE_BAD_PARAMETER because it never initialises parser_state.aml_end,
+ *      which the new parser bounds checks read.  acpi_load_table() also has
+ *      an unload counterpart, so rmmod leaves no trace in the namespace.
  *   3. acpi_evaluate_object() on KPWS with a Buffer argument -> AML CopyObject
  *      replaces the named PWKB object with our values.
  *   4. Re-issue SLKB(0x80 | level) so the change takes effect immediately.
  *
- * Module unload restores the saved original table.
+ * Module unload restores the saved original table and unloads the SSDT.
  */
 
 #include <linux/module.h>
@@ -55,6 +57,8 @@ MODULE_PARM_DESC(relevel, "Backlight level 0..3 to re-apply after patching; -1 (
 
 static u8 orig_pwkb[PWKB_LEN];
 static bool have_orig;
+static u32 kpws_table_idx;
+static bool kpws_loaded;
 
 static int pwkb_read(u8 out[PWKB_LEN])
 {
@@ -147,17 +151,20 @@ static int __init pwkb_init(void)
 	have_orig = true;
 	pr_info("asus_kbd_pwkb: original PWKB = %*ph\n", PWKB_LEN, orig_pwkb);
 
-	status = acpi_install_method(kpws_ssdt_aml);
+	status = acpi_load_table((struct acpi_table_header *)kpws_ssdt_aml,
+				 &kpws_table_idx);
 	if (ACPI_FAILURE(status)) {
-		pr_err("asus_kbd_pwkb: acpi_install_method(%s) failed: %s\n",
+		pr_err("asus_kbd_pwkb: acpi_load_table(%s) failed: %s\n",
 		       KPWS_PATH, acpi_format_exception(status));
 		return -EIO;
 	}
+	kpws_loaded = true;
 
 	ret = pwkb_write(duty);
 	if (ret) {
-		pr_warn("asus_kbd_pwkb: %s stays installed but is inert; PWKB unchanged\n",
-			KPWS_PATH);
+		pr_warn("asus_kbd_pwkb: PWKB unchanged, unloading %s\n", KPWS_PATH);
+		acpi_unload_table(kpws_table_idx);
+		kpws_loaded = false;
 		return ret;
 	}
 
@@ -172,13 +179,12 @@ static void __exit pwkb_exit(void)
 		pwkb_write(orig_pwkb);
 		slkb_reissue(relevel);
 	}
-	/* NOTE: the KPWS helper method stays installed until reboot; ACPICA has
-	 * no uninstall counterpart to acpi_install_method(). It is inert.
-	 */
+	if (kpws_loaded)
+		acpi_unload_table(kpws_table_idx);
 }
 
 module_init(pwkb_init);
 module_exit(pwkb_exit);
 MODULE_DESCRIPTION("Rewrite ASUS EC keyboard-backlight PWM duty table (PWKB) at runtime");
 MODULE_LICENSE("GPL");
-MODULE_VERSION("0.1");
+MODULE_VERSION("0.2");
