@@ -234,6 +234,13 @@ configured range. With both modules installed, the backlight key, the LED class
 device, UPower and GNOME's Quick Settings all use the new levels. With 4 or more
 steps GNOME shows a slider instead of off/low/high buttons.
 
+A second parameter, `kbd_hotkey_levels`, sets which levels the backlight key
+steps through, so the key can stay at a few coarse steps while sliders get
+every level. With `kbd_max_brightness=5 kbd_hotkey_levels=0,1,3,5` the key
+cycles off → 1 → 3 → 5 → off. If the level was set somewhere else, e.g. 2 from
+a slider, the key moves to the nearest listed level (3 going up, 1 going
+down). Leave it unset to step through every level.
+
 DKMS only builds it for 7.2.x kernels (`BUILD_EXCLUSIVE_KERNEL`), since the
 source is the 7.2.9 file. On any other kernel the in-tree asus-wmi loads as
 usual and you're back to four levels. The padding means a 6-entry table is
@@ -243,10 +250,10 @@ Six levels, for example (the `.conf` files are in `asus-wmi-levels/`):
 
 ```bash
 cd Zenbook-Keyboard-brightness-adjust-linux/asus-wmi-levels
-sudo cp -r . /usr/src/asus-wmi-kbd-levels-7.2.9.1
-sudo dkms install asus-wmi-kbd-levels/7.2.9.1
+sudo cp -r . /usr/src/asus-wmi-kbd-levels-7.2.9.2
+sudo dkms install asus-wmi-kbd-levels/7.2.9.2
 sudo install -m644 asus-wmi-kbd-levels.depmod.conf  /etc/depmod.d/asus-wmi-kbd-levels.conf
-sudo install -m644 asus-wmi-kbd-levels.modprobe.conf /etc/modprobe.d/asus-wmi-kbd-levels.conf  # kbd_max_brightness=5
+sudo install -m644 asus-wmi-kbd-levels.modprobe.conf /etc/modprobe.d/asus-wmi-kbd-levels.conf  # kbd_max_brightness=5 kbd_hotkey_levels=0,1,3,5
 echo "options asus_kbd_pwkb duty=0,10,20,40,80,140" | sudo tee /etc/modprobe.d/asus-kbd-pwkb.conf
 sudo depmod -a
 modinfo -n asus_wmi      # should point at .../extra/asus-wmi.ko.xz
@@ -265,7 +272,7 @@ GNOME's power daemon reads the step count once at login, so log out and back in
 
 `kbd_max_brightness` must be at most the number of `duty` values minus one.
 If it's higher, the extra levels just repeat the last duty value. To go back,
-`sudo dkms remove asus-wmi-kbd-levels/7.2.9.1 --all` and delete the two
+`sudo dkms remove asus-wmi-kbd-levels/7.2.9.2 --all` and delete the two
 `.conf` files.
 
 ## Uninstall
@@ -313,7 +320,7 @@ Source layout:
 | `mkaml.py` | strips iasl's `If(Zero){External...}` prologue, fixes length + checksum |
 | `Makefile` | kbuild + `make aml` |
 | `dkms.conf` | DKMS packaging |
-| `asus-wmi-levels/` | asus-wmi 7.2.9 + `kbd_max_brightness` (DKMS), with the untouched upstream file in `upstream/` |
+| `asus-wmi-levels/` | asus-wmi 7.2.9 + `kbd_max_brightness`/`kbd_hotkey_levels` (DKMS), with the untouched upstream file in `upstream/` |
 | `ca.cnf` | openssl config for the MOK signing cert |
 | `check-compat.sh` | read-only DSDT compatibility checker |
 

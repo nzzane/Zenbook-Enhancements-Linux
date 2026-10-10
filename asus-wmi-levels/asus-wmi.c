@@ -65,6 +65,18 @@ module_param(kbd_max_brightness, int, 0444);
 MODULE_PARM_DESC(kbd_max_brightness,
 		 "Highest keyboard backlight level, 1-127 (default 3). Only raise it if the firmware has a duty value for every level.");
 
+/*
+ * Levels the keyboard backlight keys step through. Empty (default) means every
+ * level from 0 to kbd_max_brightness. Lets the keys keep a few coarse steps
+ * while the LED class device (and UPower/desktop sliders) get the full range.
+ */
+#define KBD_HOTKEY_LEVELS_MAX	16
+static int kbd_hotkey_levels[KBD_HOTKEY_LEVELS_MAX];
+static int kbd_hotkey_levels_count;
+module_param_array(kbd_hotkey_levels, int, &kbd_hotkey_levels_count, 0444);
+MODULE_PARM_DESC(kbd_hotkey_levels,
+		 "Keyboard backlight levels the brightness keys step through, e.g. 0,1,3,5 (default: all levels)");
+
 #define to_asus_wmi_driver(pdrv)					\
 	(container_of((pdrv), struct asus_wmi_driver, platform_driver))
 
@@ -1807,6 +1819,34 @@ static void kbd_led_update_all(struct work_struct *work)
 }
 
 /*
+ * Level after a keyboard backlight key press. dir is +1 (up), -1 (down) or
+ * 0 (cycle: up, wrapping to 0 after the top). Without kbd_hotkey_levels this
+ * is plain +1/-1 over 0..kbd_max_brightness; with it, the next listed level
+ * above or below the current one, so a level set elsewhere (e.g. a slider)
+ * that isn't in the list still steps to its neighbours.
+ */
+static int kbd_hotkey_next(int level, int dir)
+{
+	int i, l, best = -1;
+
+	if (!kbd_hotkey_levels_count) {
+		if (dir == 0)
+			return level >= kbd_max_brightness ? 0 : level + 1;
+		return level + dir;
+	}
+
+	for (i = 0; i < kbd_hotkey_levels_count; i++) {
+		l = kbd_hotkey_levels[i];
+		if (dir < 0 ? l < level && l > best : l > level && (best < 0 || l < best))
+			best = l;
+	}
+	if (best >= 0)
+		return best;
+	/* nothing further that way: down ends at off, up stays, cycle wraps */
+	return dir > 0 ? level : 0;
+}
+
+/*
  * This function is called from hid-asus to inform asus-wmi of brightness
  * changes initiated by the keyboard backlight keys.
  */
@@ -1824,16 +1864,13 @@ int asus_hid_event(enum asus_hid_event event)
 
 	switch (event) {
 	case ASUS_EV_BRTUP:
-		brightness += 1;
+		brightness = kbd_hotkey_next(brightness, 1);
 		break;
 	case ASUS_EV_BRTDOWN:
-		brightness -= 1;
+		brightness = kbd_hotkey_next(brightness, -1);
 		break;
 	case ASUS_EV_BRTTOGGLE:
-		if (brightness >= kbd_max_brightness)
-			brightness = 0;
-		else
-			brightness += 1;
+		brightness = kbd_hotkey_next(brightness, 0);
 		break;
 	}
 
@@ -2109,7 +2146,7 @@ static void asus_wmi_led_exit(struct asus_wmi *asus)
 
 static int asus_wmi_led_init(struct asus_wmi *asus)
 {
-	int rv = 0, num_rgb_groups = 0, led_val;
+	int rv = 0, num_rgb_groups = 0, led_val, i;
 
 	if (asus->kbd_rgb_dev)
 		kbd_rgb_mode_groups[num_rgb_groups++] = &kbd_rgb_mode_group;
@@ -2143,6 +2180,8 @@ static int asus_wmi_led_init(struct asus_wmi *asus)
 			kbd_max_brightness, ASUS_EV_MAX_BRIGHTNESS);
 		kbd_max_brightness = ASUS_EV_MAX_BRIGHTNESS;
 	}
+	for (i = 0; i < kbd_hotkey_levels_count; i++)
+		kbd_hotkey_levels[i] = clamp_val(kbd_hotkey_levels[i], 0, kbd_max_brightness);
 	asus->kbd_led.max_brightness = kbd_max_brightness;
 	asus->kbd_led_avail = !kbd_led_read(asus, &led_val, NULL);
 	INIT_WORK(&asus->kbd_led_work, kbd_led_update_all);
@@ -4643,18 +4682,15 @@ static void asus_wmi_handle_event_code(int code, struct asus_wmi *asus)
 		led_value = asus->kbd_led_wk;
 
 	if (code == NOTIFY_KBD_BRTUP) {
-		kbd_led_set_by_kbd(asus, led_value + 1);
+		kbd_led_set_by_kbd(asus, kbd_hotkey_next(led_value, 1));
 		return;
 	}
 	if (code == NOTIFY_KBD_BRTDWN) {
-		kbd_led_set_by_kbd(asus, led_value - 1);
+		kbd_led_set_by_kbd(asus, kbd_hotkey_next(led_value, -1));
 		return;
 	}
 	if (code == NOTIFY_KBD_BRTTOGGLE) {
-		if (led_value >= kbd_max_brightness)
-			kbd_led_set_by_kbd(asus, 0);
-		else
-			kbd_led_set_by_kbd(asus, led_value + 1);
+		kbd_led_set_by_kbd(asus, kbd_hotkey_next(led_value, 0));
 		return;
 	}
 
