@@ -1,5 +1,5 @@
 /*
- * Helper method installed at runtime via acpi_install_method().
+ * Helper method loaded at runtime via acpi_load_table().
  * Its only job: CopyObject a caller-supplied Buffer onto the firmware's
  * keyboard-backlight PWM duty table \_SB.PC00.LPCB.EC0.PWKB.
  *

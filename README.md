@@ -232,16 +232,16 @@ Three ACPICA calls, none of which is gated by lockdown:
 
 1. **`acpi_evaluate_object()` on the `PWKB` Name node** — reads and saves the
    original 4-byte buffer, so unload can put it back.
-2. **`acpi_install_method()`** with an 89-byte SSDT containing exactly one
+2. **`acpi_load_table()`** with an 89-byte SSDT containing exactly one
    `DefMethod`, `\_SB.PC00.LPCB.EC0.KPWS(Arg0)`, whose body is:
    ```asl
    CopyObject (Arg0, \_SB.PC00.LPCB.EC0.PWKB)
    Return (Zero)
    ```
-   This is the trick that sidesteps `LOCKDOWN_ACPI_TABLES`: installing a single
-   control method is not the same thing as overriding an ACPI table, and ACPICA
-   documents it as supported ("If the method name already exists in the
-   namespace, it is overwritten").
+   This is what sidesteps `LOCKDOWN_ACPI_TABLES`: loading an extra SSDT that
+   adds one new method is not the same thing as overriding an existing ACPI
+   table. (Up to v0.1 this used `acpi_install_method()`, which fails with
+   `AE_BAD_PARAMETER` since ACPICA 20260408 / Linux 7.2.)
 3. **`acpi_evaluate_object()` on `KPWS`** with a Buffer argument — AML
    `CopyObject` replaces the named `PWKB` object with our values. Then `SLKB(0x80 | level)`
    is re-issued so the panel updates on the spot.
@@ -274,11 +274,10 @@ make aml                         # rewrites kpws_aml.h
 
 ## Caveats
 
-- **The `KPWS` helper method stays installed until reboot.** ACPICA has no
-  uninstall counterpart to `acpi_install_method()`. It is inert after unload —
-  nothing calls it — and it's gone on the next boot.
-- **Unload restores the table, but only if the module loaded cleanly.** If
-  `acpi_install_method()` fails, nothing is changed at all.
+- **Unload restores the table and removes `KPWS`.** The helper SSDT is
+  unloaded with `acpi_unload_table()`, so nothing is left in the namespace.
+- **Nothing changes unless the module loads cleanly.** If `acpi_load_table()`
+  or the `KPWS` call fails, `PWKB` is left as it was.
 - **Very low duty is a hardware question.** Some LED drivers won't strike below
   a threshold and will flicker or stay dark. That's what the `duty` parameter is
   for; a bad value costs you an `rmmod`.
