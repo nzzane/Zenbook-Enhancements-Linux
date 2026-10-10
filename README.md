@@ -236,25 +236,34 @@ steps GNOME shows a slider instead of off/low/high buttons.
 
 A second parameter, `kbd_hotkey_levels`, sets which levels the backlight key
 steps through, so the key can stay at a few coarse steps while sliders get
-every level. With `kbd_max_brightness=5 kbd_hotkey_levels=0,1,3,5` the key
-cycles off → 1 → 3 → 5 → off. If the level was set somewhere else, e.g. 2 from
-a slider, the key moves to the nearest listed level (3 going up, 1 going
-down). Leave it unset to step through every level.
+every level. With `kbd_max_brightness=10 kbd_hotkey_levels=0,1,3,5,10` the
+key cycles off → 1 → 3 → 5 → 10 → off. If the level was set somewhere else,
+e.g. 7 from a slider, the key moves to the nearest listed level (10 going up,
+5 going down). Leave it unset to step through every level.
 
 DKMS only builds it for 7.2.x kernels (`BUILD_EXCLUSIVE_KERNEL`), since the
 source is the 7.2.9 file. On any other kernel the in-tree asus-wmi loads as
-usual and you're back to four levels. The padding means a 6-entry table is
+usual and you're back to four levels. The padding means a longer table is
 harmless with stock asus-wmi.
 
-Six levels, for example (the `.conf` files are in `asus-wmi-levels/`):
+Eleven levels, for example: the dim end of the stock-ish ramp, then five
+steps up to full brightness. The key cycles through five of them:
+
+```
+level  0   1   2   3   4   5    6    7    8    9    10
+duty   0   10  20  40  80  140  165  190  210  235  255
+key    *   *       *       *                         *
+```
+
+The `.conf` files are in `asus-wmi-levels/`:
 
 ```bash
 cd Zenbook-Keyboard-brightness-adjust-linux/asus-wmi-levels
 sudo cp -r . /usr/src/asus-wmi-kbd-levels-7.2.9.2
 sudo dkms install asus-wmi-kbd-levels/7.2.9.2
 sudo install -m644 asus-wmi-kbd-levels.depmod.conf  /etc/depmod.d/asus-wmi-kbd-levels.conf
-sudo install -m644 asus-wmi-kbd-levels.modprobe.conf /etc/modprobe.d/asus-wmi-kbd-levels.conf  # kbd_max_brightness=5 kbd_hotkey_levels=0,1,3,5
-echo "options asus_kbd_pwkb duty=0,10,20,40,80,140" | sudo tee /etc/modprobe.d/asus-kbd-pwkb.conf
+sudo install -m644 asus-wmi-kbd-levels.modprobe.conf /etc/modprobe.d/asus-wmi-kbd-levels.conf  # kbd_max_brightness=10 kbd_hotkey_levels=0,1,3,5,10
+echo "options asus_kbd_pwkb duty=0,10,20,40,80,140,165,190,210,235,255" | sudo tee /etc/modprobe.d/asus-kbd-pwkb.conf
 sudo depmod -a
 modinfo -n asus_wmi      # should point at .../extra/asus-wmi.ko.xz
 ```
@@ -264,7 +273,7 @@ Then reboot, or reload the drivers in place:
 ```bash
 sudo modprobe -r asus_kbd_pwkb asus_armoury asus_nb_wmi asus_wmi
 sudo modprobe asus_nb_wmi && sudo modprobe asus_armoury && sudo modprobe asus_kbd_pwkb
-cat /sys/class/leds/asus::kbd_backlight/max_brightness    # 5
+cat /sys/class/leds/asus::kbd_backlight/max_brightness    # 10
 ```
 
 GNOME's power daemon reads the step count once at login, so log out and back in
