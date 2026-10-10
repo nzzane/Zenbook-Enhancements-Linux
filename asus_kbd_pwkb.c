@@ -31,6 +31,13 @@
  *   4. Re-issue SLKB(0x80 | level) so the change takes effect immediately.
  *
  * Module unload restores the saved original table and unloads the SSDT.
+ *
+ * More levels: SLKB indexes PWKB with the full 7-bit level (Arg0 & 0x7F), so
+ * the table can be longer than the stock 4 entries. duty= takes 2-16 values
+ * and the table written to the firmware is padded to 128 entries with the
+ * last value, so no level the WMI interface can send ever indexes past the
+ * end. asus-wmi itself stops at level 3 unless it is built with the
+ * kbd_max_brightness parameter (see asus-wmi-levels/).
  */
 
 #include <linux/module.h>
@@ -44,23 +51,26 @@
 #define SLKB_PATH	EC_PATH ".SLKB"
 #define GLKB_PATH	EC_PATH ".GLKB"
 #define KPWS_PATH	EC_PATH ".KPWS"
-#define PWKB_LEN	4
+#define PWKB_ORIG_LEN	4	/* stock firmware: Buffer (0x04) */
+#define DUTY_MAX	16	/* most levels accepted in duty= */
+#define PWKB_LEN	128	/* SLKB indexes with Arg0 & 0x7F */
 
-static unsigned char duty[PWKB_LEN] = { 0x00, 0x0A, 0xAA, 0xFF };
-static int duty_count = PWKB_LEN;
+static unsigned char duty[DUTY_MAX] = { 0x00, 0x0A, 0xAA, 0xFF };
+static int duty_count = 4;
 module_param_array(duty, byte, &duty_count, 0444);
-MODULE_PARM_DESC(duty, "4 PWM duty bytes for backlight levels 0..3 (default 0,10,170,255)");
+MODULE_PARM_DESC(duty, "2-16 PWM duty bytes, one per backlight level starting at 0 (default 0,10,170,255)");
 
 static int relevel = -1;
 module_param(relevel, int, 0444);
-MODULE_PARM_DESC(relevel, "Backlight level 0..3 to re-apply after patching; -1 (default) = read the current level from firmware, -2 = skip");
+MODULE_PARM_DESC(relevel, "Backlight level to re-apply after patching; -1 (default) = read the current level from firmware, -2 = skip");
 
-static u8 orig_pwkb[PWKB_LEN];
+static u8 orig_pwkb[PWKB_ORIG_LEN];
+static u8 table[PWKB_LEN];
 static bool have_orig;
 static u32 kpws_table_idx;
 static bool kpws_loaded;
 
-static int pwkb_read(u8 out[PWKB_LEN])
+static int pwkb_read(u8 out[PWKB_ORIG_LEN])
 {
 	struct acpi_buffer ret = { ACPI_ALLOCATE_BUFFER, NULL };
 	union acpi_object *obj;
@@ -73,24 +83,24 @@ static int pwkb_read(u8 out[PWKB_LEN])
 		return -ENODEV;
 	}
 	obj = ret.pointer;
-	if (!obj || obj->type != ACPI_TYPE_BUFFER || obj->buffer.length != PWKB_LEN) {
+	if (!obj || obj->type != ACPI_TYPE_BUFFER || obj->buffer.length != PWKB_ORIG_LEN) {
 		pr_err("asus_kbd_pwkb: %s is not a Buffer(4)\n", PWKB_PATH);
 		kfree(ret.pointer);
 		return -ENODEV;
 	}
-	memcpy(out, obj->buffer.pointer, PWKB_LEN);
+	memcpy(out, obj->buffer.pointer, PWKB_ORIG_LEN);
 	kfree(ret.pointer);
 	return 0;
 }
 
-static int pwkb_write(const u8 in[PWKB_LEN])
+static int pwkb_write(const u8 *in, u32 len)
 {
 	union acpi_object arg;
 	struct acpi_object_list list = { .count = 1, .pointer = &arg };
 	acpi_status status;
 
 	arg.type = ACPI_TYPE_BUFFER;
-	arg.buffer.length = PWKB_LEN;
+	arg.buffer.length = len;
 	arg.buffer.pointer = (u8 *)in;
 
 	status = acpi_evaluate_object(NULL, (acpi_string)KPWS_PATH, &list, NULL);
@@ -121,15 +131,17 @@ static int glkb_current(void)
 }
 
 /* Make the new table visible right away: firmware SLKB re-reads PWKB. */
-static void slkb_reissue(int level)
+static void slkb_reissue(int level, int levels)
 {
 	union acpi_object arg;
 	struct acpi_object_list list = { .count = 1, .pointer = &arg };
 
 	if (level == -1)
 		level = glkb_current();
-	if (level < 0 || level > 3)
+	if (level < 0)
 		return;
+	if (level >= levels)
+		level = levels - 1;
 	arg.type = ACPI_TYPE_INTEGER;
 	arg.integer.value = 0x80 | level;
 	acpi_evaluate_object(NULL, (acpi_string)SLKB_PATH, &list, NULL);
@@ -138,18 +150,20 @@ static void slkb_reissue(int level)
 static int __init pwkb_init(void)
 {
 	acpi_status status;
-	int ret;
+	int ret, i;
 
-	if (duty_count != PWKB_LEN) {
-		pr_err("asus_kbd_pwkb: duty= needs exactly %d bytes\n", PWKB_LEN);
+	if (duty_count < 2) {
+		pr_err("asus_kbd_pwkb: duty= needs 2 to %d bytes\n", DUTY_MAX);
 		return -EINVAL;
 	}
+	for (i = 0; i < PWKB_LEN; i++)
+		table[i] = duty[min(i, duty_count - 1)];
 
 	ret = pwkb_read(orig_pwkb);
 	if (ret)
 		return ret;
 	have_orig = true;
-	pr_info("asus_kbd_pwkb: original PWKB = %*ph\n", PWKB_LEN, orig_pwkb);
+	pr_info("asus_kbd_pwkb: original PWKB = %*ph\n", PWKB_ORIG_LEN, orig_pwkb);
 
 	status = acpi_load_table((struct acpi_table_header *)kpws_ssdt_aml,
 				 &kpws_table_idx);
@@ -160,7 +174,7 @@ static int __init pwkb_init(void)
 	}
 	kpws_loaded = true;
 
-	ret = pwkb_write(duty);
+	ret = pwkb_write(table, PWKB_LEN);
 	if (ret) {
 		pr_warn("asus_kbd_pwkb: PWKB unchanged, unloading %s\n", KPWS_PATH);
 		acpi_unload_table(kpws_table_idx);
@@ -168,16 +182,17 @@ static int __init pwkb_init(void)
 		return ret;
 	}
 
-	slkb_reissue(relevel);
-	pr_info("asus_kbd_pwkb: PWKB now %*ph\n", PWKB_LEN, (u8 *)duty);
+	slkb_reissue(relevel, duty_count);
+	pr_info("asus_kbd_pwkb: PWKB now %d levels: %*ph\n", duty_count,
+		duty_count, (u8 *)duty);
 	return 0;
 }
 
 static void __exit pwkb_exit(void)
 {
 	if (have_orig) {
-		pwkb_write(orig_pwkb);
-		slkb_reissue(relevel);
+		pwkb_write(orig_pwkb, PWKB_ORIG_LEN);
+		slkb_reissue(relevel, PWKB_ORIG_LEN);
 	}
 	if (kpws_loaded)
 		acpi_unload_table(kpws_table_idx);
@@ -187,4 +202,4 @@ module_init(pwkb_init);
 module_exit(pwkb_exit);
 MODULE_DESCRIPTION("Rewrite ASUS EC keyboard-backlight PWM duty table (PWKB) at runtime");
 MODULE_LICENSE("GPL");
-MODULE_VERSION("0.2");
+MODULE_VERSION("0.3");

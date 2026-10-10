@@ -137,7 +137,7 @@ enter the one-time password → **Reboot**. This is the only reboot required.
 
 ```bash
 cd Zenbook-Keyboard-brightness-adjust-linux
-sudo dkms add . && sudo dkms install asus-kbd-pwkb/0.1
+sudo dkms add . && sudo dkms install asus-kbd-pwkb/0.3
 sudo modprobe asus_kbd_pwkb
 sudo dmesg | tail -3
 ```
@@ -146,7 +146,7 @@ Expected:
 
 ```
 asus_kbd_pwkb: original PWKB = 00 55 aa ff
-asus_kbd_pwkb: PWKB now 00 0a aa ff
+asus_kbd_pwkb: PWKB now 4 levels: 00 0a aa ff
 ```
 
 Set the backlight to level 1 (Fn+F3 / the brightness keys) and look at it.
@@ -163,8 +163,10 @@ boot. DKMS rebuilds and re-signs it automatically on kernel updates.
 
 ## Changing the brightness levels
 
-The `duty` parameter is the whole table: four PWM duty bytes for backlight
-levels 0, 1, 2 and 3. `0` = off, `255` = full brightness.
+The `duty` parameter is the whole table: one PWM duty byte per backlight
+level, starting at level 0. `0` = off, `255` = full brightness. Stock asus-wmi
+only uses levels 0-3, so give four values unless you also install the patched
+asus-wmi from [More than four levels](#more-than-four-levels).
 
 ```
 byte value   duty      byte value   duty
@@ -208,19 +210,70 @@ immediately, instead of only after the next keypress.
 | `relevel` | Behaviour |
 |---|---|
 | `-1` (default) | read the current level from firmware via `GLKB(2)` and re-apply it |
-| `0`–`3` | force this level after patching |
+| `0` and up | force this level after patching (capped at the last `duty` entry) |
 | `-2` | don't touch the backlight at all |
 
 ```bash
 sudo modprobe asus_kbd_pwkb duty=0,10,170,255 relevel=1
 ```
 
+## More than four levels
+
+The firmware itself isn't limited to four levels. `SLKB` indexes `PWKB` with
+the full 7-bit level (`Arg0 & 0x7F`) and the EC takes any 8-bit duty, so the
+module accepts 2-16 `duty` values. It pads the table it writes to 128 entries
+with the last value, so no level can index past the end.
+
+The 4-level limit is in the kernel: asus-wmi hardcodes
+`ASUS_EV_MAX_BRIGHTNESS` (3) for the LED's `max_brightness`, the hotkey cycle
+and its clamps. [`asus-wmi-levels/`](asus-wmi-levels) is asus-wmi from Linux
+7.2.9 with one change ([`kbd-max-brightness.patch`](asus-wmi-levels/kbd-max-brightness.patch)):
+a `kbd_max_brightness` module parameter that replaces that constant. The
+default is still 3. `hid-asus` keyboards still get 0-3, scaled from the
+configured range. With both modules installed, the backlight key, the LED class
+device, UPower and GNOME's Quick Settings all use the new levels. With 4 or more
+steps GNOME shows a slider instead of off/low/high buttons.
+
+DKMS only builds it for 7.2.x kernels (`BUILD_EXCLUSIVE_KERNEL`), since the
+source is the 7.2.9 file. On any other kernel the in-tree asus-wmi loads as
+usual and you're back to four levels. The padding means a 6-entry table is
+harmless with stock asus-wmi.
+
+Six levels, for example (the `.conf` files are in `asus-wmi-levels/`):
+
+```bash
+cd Zenbook-Keyboard-brightness-adjust-linux/asus-wmi-levels
+sudo cp -r . /usr/src/asus-wmi-kbd-levels-7.2.9.1
+sudo dkms install asus-wmi-kbd-levels/7.2.9.1
+sudo install -m644 asus-wmi-kbd-levels.depmod.conf  /etc/depmod.d/asus-wmi-kbd-levels.conf
+sudo install -m644 asus-wmi-kbd-levels.modprobe.conf /etc/modprobe.d/asus-wmi-kbd-levels.conf  # kbd_max_brightness=5
+echo "options asus_kbd_pwkb duty=0,10,20,40,80,140" | sudo tee /etc/modprobe.d/asus-kbd-pwkb.conf
+sudo depmod -a
+modinfo -n asus_wmi      # should point at .../extra/asus-wmi.ko.xz
+```
+
+Then reboot, or reload the drivers in place:
+
+```bash
+sudo modprobe -r asus_kbd_pwkb asus_armoury asus_nb_wmi asus_wmi
+sudo modprobe asus_nb_wmi && sudo modprobe asus_armoury && sudo modprobe asus_kbd_pwkb
+cat /sys/class/leds/asus::kbd_backlight/max_brightness    # 5
+```
+
+GNOME's power daemon reads the step count once at login, so log out and back in
+(or `systemctl --user restart org.gnome.SettingsDaemon.Power.target`).
+
+`kbd_max_brightness` must be at most the number of `duty` values minus one.
+If it's higher, the extra levels just repeat the last duty value. To go back,
+`sudo dkms remove asus-wmi-kbd-levels/7.2.9.1 --all` and delete the two
+`.conf` files.
+
 ## Uninstall
 
 ```bash
 sudo rm -f /etc/modules-load.d/asus_kbd_pwkb.conf /etc/modprobe.d/asus-kbd-pwkb.conf
 sudo modprobe -r asus_kbd_pwkb          # restores the original PWKB table
-sudo dkms remove asus-kbd-pwkb/0.1 --all
+sudo dkms remove asus-kbd-pwkb/0.3 --all
 ```
 
 The MOK stays enrolled; remove it with `sudo mokutil --delete /var/lib/dkms/mok.pub`
@@ -260,6 +313,7 @@ Source layout:
 | `mkaml.py` | strips iasl's `If(Zero){External...}` prologue, fixes length + checksum |
 | `Makefile` | kbuild + `make aml` |
 | `dkms.conf` | DKMS packaging |
+| `asus-wmi-levels/` | asus-wmi 7.2.9 + `kbd_max_brightness` (DKMS), with the untouched upstream file in `upstream/` |
 | `ca.cnf` | openssl config for the MOK signing cert |
 | `check-compat.sh` | read-only DSDT compatibility checker |
 

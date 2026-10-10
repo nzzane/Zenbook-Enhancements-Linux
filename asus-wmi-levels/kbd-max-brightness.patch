@@ -1,0 +1,93 @@
+--- a/drivers/platform/x86/asus-wmi.c
++++ b/drivers/platform/x86/asus-wmi.c
+@@ -54,6 +54,17 @@
+ static bool fnlock_default = true;
+ module_param(fnlock_default, bool, 0444);
+ 
++/*
++ * Highest keyboard backlight level. The WMI interface carries a 7-bit level
++ * (DEVS 0x00050021 takes 0x80 | level), but most firmware only has duty values
++ * for levels 0-3. Raise this only when the firmware's duty table has been
++ * extended to match, e.g. by asus_kbd_pwkb on the Zenbook S 14 (UX5406SA).
++ */
++static int kbd_max_brightness = ASUS_EV_MAX_BRIGHTNESS;
++module_param(kbd_max_brightness, int, 0444);
++MODULE_PARM_DESC(kbd_max_brightness,
++		 "Highest keyboard backlight level, 1-127 (default 3). Only raise it if the firmware has a duty value for every level.");
++
+ #define to_asus_wmi_driver(pdrv)					\
+ 	(container_of((pdrv), struct asus_wmi_driver, platform_driver))
+ 
+@@ -1787,8 +1798,10 @@
+ 	if (value >= 0)
+ 		do_kbd_led_set(&asus->kbd_led, value);
+ 	if (notify) {
+-		scoped_guard(spinlock_irqsave, &asus_ref.lock)
++		scoped_guard(spinlock_irqsave, &asus_ref.lock) {
+ 			asus->kbd_led_notify = false;
++			value = asus->kbd_led_wk;
++		}
+ 		led_classdev_notify_brightness_hw_changed(&asus->kbd_led, value);
+ 	}
+ }
+@@ -1817,14 +1830,14 @@
+ 		brightness -= 1;
+ 		break;
+ 	case ASUS_EV_BRTTOGGLE:
+-		if (brightness >= ASUS_EV_MAX_BRIGHTNESS)
++		if (brightness >= kbd_max_brightness)
+ 			brightness = 0;
+ 		else
+ 			brightness += 1;
+ 		break;
+ 	}
+ 
+-	asus->kbd_led_wk = clamp_val(brightness, 0, ASUS_EV_MAX_BRIGHTNESS);
++	asus->kbd_led_wk = clamp_val(brightness, 0, kbd_max_brightness);
+ 	asus->kbd_led_notify = true;
+ 	queue_work(asus->led_workqueue, &asus->kbd_led_work);
+ 	return 0;
+@@ -1917,14 +1930,18 @@
+ 	asus = container_of(led_cdev, struct asus_wmi, kbd_led);
+ 
+ 	scoped_guard(spinlock_irqsave, &asus_ref.lock)
+-		asus->kbd_led_wk = clamp_val(value, 0, ASUS_EV_MAX_BRIGHTNESS);
++		asus->kbd_led_wk = clamp_val(value, 0, kbd_max_brightness);
+ 
+ 	if (asus->kbd_led_avail)
+ 		kbd_led_update(asus);
+ 
+ 	scoped_guard(spinlock_irqsave, &asus_ref.lock) {
++		/* hid-asus keyboards take 0-ASUS_EV_MAX_BRIGHTNESS; scale to that */
++		int hid_level = DIV_ROUND_UP(asus->kbd_led_wk * ASUS_EV_MAX_BRIGHTNESS,
++					     kbd_max_brightness);
++
+ 		list_for_each_entry(listener, &asus_ref.listeners, list)
+-			listener->brightness_set(listener, asus->kbd_led_wk);
++			listener->brightness_set(listener, hid_level);
+ 	}
+ }
+ 
+@@ -2121,7 +2138,12 @@
+ 	asus->kbd_led.flags = LED_BRIGHT_HW_CHANGED;
+ 	asus->kbd_led.brightness_set_blocking = kbd_led_set;
+ 	asus->kbd_led.brightness_get = kbd_led_get;
+-	asus->kbd_led.max_brightness = ASUS_EV_MAX_BRIGHTNESS;
++	if (kbd_max_brightness < 1 || kbd_max_brightness > 0x7F) {
++		pr_warn("kbd_max_brightness=%d out of range 1-127, using %d\n",
++			kbd_max_brightness, ASUS_EV_MAX_BRIGHTNESS);
++		kbd_max_brightness = ASUS_EV_MAX_BRIGHTNESS;
++	}
++	asus->kbd_led.max_brightness = kbd_max_brightness;
+ 	asus->kbd_led_avail = !kbd_led_read(asus, &led_val, NULL);
+ 	INIT_WORK(&asus->kbd_led_work, kbd_led_update_all);
+ 
+@@ -4629,7 +4651,7 @@
+ 		return;
+ 	}
+ 	if (code == NOTIFY_KBD_BRTTOGGLE) {
+-		if (led_value >= ASUS_EV_MAX_BRIGHTNESS)
++		if (led_value >= kbd_max_brightness)
+ 			kbd_led_set_by_kbd(asus, 0);
+ 		else
+ 			kbd_led_set_by_kbd(asus, led_value + 1);
