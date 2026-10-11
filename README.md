@@ -1,358 +1,52 @@
-# Zenbook Keyboard Brightness Adjust (Linux)
+# Zenbook Enhancements (Linux)
+
 You used AI: Yes, because I ain't digging that deep for keyboard control, but boy did Claude.
 Works pretty well, can finally use the laptop in a dim room....
 
-Make the ASUS Zenbook keyboard backlight **actually dim** on Linux — with
-Secure Boot and kernel lockdown left enabled.
+Fixes and extras for the ASUS Zenbook S 14 (UX5406SA) on Linux, so the
+keyboard and its special keys work the way they do on Windows. Secure Boot and
+kernel lockdown stay enabled throughout. Each part is independent; install
+only the ones you want.
 
-The kernel module is called `asus_kbd_pwkb`.
-
-On the ASUS Zenbook S 14 (UX5406SA) the firmware only exposes 4 backlight
-levels, and level 1 — the dimmest non-off setting — is 33% PWM duty. In a dark
-room that is still glaring. The levels come from a 4-byte table in the DSDT:
-
-```
-\_SB.PC00.LPCB.EC0.PWKB = Buffer(4) { 0x00, 0x55, 0xAA, 0xFF }
-                                        ^level0 ^1    ^2    ^3
-```
-
-The usual fix is to patch that byte in the DSDT and load the patched table
-early via initrd — but overriding an ACPI table is blocked by
-`LOCKDOWN_ACPI_TABLES`, so it requires disabling Secure Boot or kernel
-lockdown. This module changes the same byte **at runtime instead**, using only
-exported ACPICA calls that carry no lockdown hook. Secure Boot stays on,
-lockdown stays at `integrity`, and the module itself is MOK-signed by DKMS.
-
-Because it rewrites the data the *firmware's own* `SLKB` method reads, every
-existing path keeps working and picks up the new value: the Fn hotkeys,
-`/sys/class/leds/asus::kbd_backlight/brightness`, `asusctl`, resume-from-suspend,
-all of it.
-
-```
-level 1: 0x55 (33% duty)  ->  0x0A (3.9% duty)
-```
-
-## Will it work on my machine?
-
-Run the checker. It only reads — it dumps your DSDT, disassembles it, and looks
-for the three things the module needs:
-
-```bash
-sudo dnf install acpica-tools      # or: sudo apt install acpica-tools
-sudo ./check-compat.sh
-```
-
-```
-ACPI table
-  [ ok ] found PWKB at \_SB.PC00.LPCB.EC0.PWKB
-  [ ok ] PWKB is a Buffer(4): 0x00 0x55 0xAA 0xFF
-  [ ok ] found SLKB at \_SB.PC00.LPCB.EC0.SLKB
-  [ ok ] found GLKB at \_SB.PC00.LPCB.EC0.GLKB
-  [ ok ] path matches the module default -- no source edit needed
-
-Verdict
-  COMPATIBLE -- follow the README as written.
-```
-
-What it's checking, and what each answer means for you:
-
-| Requirement | If it's missing |
+| Part | What you get |
 |---|---|
-| `PWKB` — a `Buffer(4)` of PWM duty values | **Dead end.** Your firmware doesn't drive the backlight from a duty table, and nothing here applies. |
-| `SLKB` — the method that applies a level by indexing `PWKB` | **Dead end.** Nothing would push the new values to the EC. |
-| `GLKB` — reads the current level | Works fine; load with `relevel=0..3` instead of the default `relevel=-1`. |
-| The ACPI path matches `\_SB.PC00.LPCB.EC0` | Works fine, but edit `EC_PATH` in `asus_kbd_pwkb.c` and both paths in `kpws.asl`, then `make aml`. The checker prints your actual path. |
+| [keyboard-backlight](keyboard-backlight/README.md) | A keyboard backlight that actually dims: a runtime rewrite of the firmware's brightness table, plus an optional patched asus-wmi for up to 11 levels with a GNOME slider. |
+| [camera-mic](camera-mic/README.md) | F10 really disconnects the webcam, the key LED shows the camera state, the off state survives reboots, a GNOME popup, and both key LEDs restored after suspend. |
+| [fan](fan/README.md) | A Quick Settings fan tile with live RPM, and F12 (MyASUS) cycles Quiet → Balanced → Performance → Full speed with a volume-style popup. |
+| [fn-keys](fn-keys/README.md) | Media keys by default instead of F1-F12, and the emoji key (F8) opens an emoji picker. |
 
-The checker also flags a level 1 that's already dim (nothing to gain), missing
-kernel headers, missing DKMS, and whether Secure Boot means you'll need to
-enroll a MOK.
+`gnome-keybinding.sh` adds a GNOME custom shortcut without touching your
+existing ones. The camera and emoji keys use it.
 
-It ends with a paste-ready block for a compatibility report — **please open an
-issue with it either way**, working or not. That's how the table below grows.
+## Tested hardware
 
-### Tested hardware
+| Model | BIOS | Kernel | Desktop |
+|---|---|---|---|
+| ASUS Zenbook S 14 UX5406SA | UX5406SA.309 | 7.2.9-200.fc44 (Fedora 44) | GNOME 50 (Wayland) |
 
-| Model | BIOS | Kernel | PWKB path | Result |
-|---|---|---|---|---|
-| ASUS Zenbook S 14 UX5406SA | UX5406SA.309 | 7.1.8-200.fc44 (Fedora 44) | `\_SB.PC00.LPCB.EC0` | works, Secure Boot on, lockdown `integrity` |
+The keyboard backlight module works on any ASUS machine with the same ACPI
+structure, and `keyboard-backlight/check-compat.sh` tells you whether yours
+has it. The camera LED GPIO, USB IDs and key codes are specific to the
+UX5406SA; the READMEs say what to change for other models. Compatibility
+reports are welcome as issues, working or not.
 
-Any ASUS machine whose DSDT has a `PWKB` `Buffer(4)` plus `SLKB`/`GLKB` should
-work — this is EC firmware structure, not a per-model driver, so it is not
-limited to Zenbooks. It just hasn't been confirmed anywhere else yet.
+## Troubleshooting
 
-If you'd rather look by hand than run the script:
-
-```bash
-sudo acpidump -b -n DSDT -o dsdt.dat && iasl -d dsdt.dat
-grep -n -B2 -A6 'PWKB\|SLKB\|GLKB' dsdt.dsl
-```
-
-## Requirements
+**All GNOME extensions turned off after a logout or reboot.** GNOME 50.5 can
+crash while logging out. After a GNOME Shell crash, GNOME switches off every
+user extension in case one of them caused it. Turn them back on with the main
+switch in the Extensions app, or:
 
 ```bash
-# Fedora
-sudo dnf install kernel-devel-$(uname -r) gcc make elfutils-libelf-devel dkms mokutil openssl
-# Debian/Ubuntu
-sudo apt install linux-headers-$(uname -r) build-essential dkms mokutil openssl
+gsettings set org.gnome.shell disable-user-extensions false
 ```
 
-`acpica-tools` (for `iasl` and `acpidump`) is needed by `check-compat.sh`, and
-with `python3` also to regenerate the AML.
+**Keyboard backlight levels wrong after changing `duty=`.** See step 5 in
+[keyboard-backlight](keyboard-backlight/README.md#5-make-it-permanent). The
+module has to be kept out of the initramfs.
 
-## Install
-
-### 1. Create a signing key (skip if you already have a MOK enrolled)
-
-Secure Boot means the module has to be signed by a key the firmware trusts.
-`ca.cnf` in this repo generates a suitable self-signed CA cert.
-
-```bash
-openssl req -new -x509 -nodes -days 3650 -config ca.cnf \
-    -newkey rsa:4096 -keyout mok.key -outform DER -out mok.pub
-```
-
-`mok.key` is a **private key — never commit it**. `.gitignore` already excludes
-both files.
-
-### 2. Hand the key to DKMS *before* the first build
-
-If you skip this, DKMS generates its own key and you'll enroll the wrong one.
-
-```bash
-sudo install -m600 mok.key /var/lib/dkms/mok.key
-sudo install -m644 mok.pub /var/lib/dkms/mok.pub
-```
-
-### 3. Enroll the key in firmware
-
-```bash
-sudo mokutil --import /var/lib/dkms/mok.pub   # prompts for a one-time password
-sudo reboot
-```
-
-On reboot, MokManager takes over the screen: **Enroll MOK → Continue → Yes →**
-enter the one-time password → **Reboot**. This is the only reboot required.
-
-### 4. Build and load
-
-```bash
-cd Zenbook-Keyboard-brightness-adjust-linux
-sudo dkms add . && sudo dkms install asus-kbd-pwkb/0.3
-sudo modprobe asus_kbd_pwkb
-sudo dmesg | tail -3
-```
-
-Expected:
-
-```
-asus_kbd_pwkb: original PWKB = 00 55 aa ff
-asus_kbd_pwkb: PWKB now 4 levels: 00 0a aa ff
-```
-
-Set the backlight to level 1 (Fn+F3 / the brightness keys) and look at it.
-
-### 5. Make it permanent
-
-```bash
-echo "options asus_kbd_pwkb duty=0,10,45,140" | sudo tee /etc/modprobe.d/asus-kbd-pwkb.conf
-echo asus_kbd_pwkb | sudo tee /etc/modules-load.d/asus_kbd_pwkb.conf
-```
-
-The first file pins your chosen duty values, the second loads the module at
-boot. DKMS rebuilds and re-signs it automatically on kernel updates.
-
-## Changing the brightness levels
-
-The `duty` parameter is the whole table: one PWM duty byte per backlight
-level, starting at level 0. `0` = off, `255` = full brightness. Stock asus-wmi
-only uses levels 0-3, so give four values unless you also install the patched
-asus-wmi from [More than four levels](#more-than-four-levels).
-
-```
-byte value   duty      byte value   duty
-0x00    0     0.0%     0x55   85    33.3%   <- stock level 1
-0x05    5     2.0%     0x80  128    50.2%
-0x0A   10     3.9%     0xAA  170    66.7%   <- stock level 2
-0x14   20     7.8%     0xFF  255   100.0%   <- stock level 3
-0x20   32    12.5%
-```
-
-Tune it live, no reboot needed — `rmmod` restores the firmware's original table
-every time, so the escape hatch is always one command:
-
-```bash
-sudo rmmod asus_kbd_pwkb                       # back to 00 55 aa ff
-sudo modprobe asus_kbd_pwkb duty=0,20,170,255  # 0x14, less aggressive
-```
-
-`0x0A` is the value in use here for level 1. If your LED driver can't strike
-that low (the backlight flickers, or just stays dark at level 1), step up:
-`20`, then `32`.
-
-Stock jumps from 33% straight to 67% and 100%, which is a cliff once level 1 is
-down at 4%. Remapping the upper levels too gives a ramp that's roughly even to
-the eye:
-
-```
-duty=0,10,45,140     # 0% / 3.9% / 17.6% / 54.9%   <- in use here
-duty=0,10,45,180     # same, brighter top end for daylight
-duty=0,10,64,160     # gentler dim end, gentler top end
-```
-
-Once you've picked values, put them in `/etc/modprobe.d/asus-kbd-pwkb.conf` as
-shown above.
-
-### `relevel`
-
-After rewriting the table the module re-issues `SLKB` so the change is visible
-immediately, instead of only after the next keypress.
-
-| `relevel` | Behaviour |
-|---|---|
-| `-1` (default) | read the current level from firmware via `GLKB(2)` and re-apply it |
-| `0` and up | force this level after patching (capped at the last `duty` entry) |
-| `-2` | don't touch the backlight at all |
-
-```bash
-sudo modprobe asus_kbd_pwkb duty=0,10,170,255 relevel=1
-```
-
-## More than four levels
-
-The firmware itself isn't limited to four levels. `SLKB` indexes `PWKB` with
-the full 7-bit level (`Arg0 & 0x7F`) and the EC takes any 8-bit duty, so the
-module accepts 2-16 `duty` values. It pads the table it writes to 128 entries
-with the last value, so no level can index past the end.
-
-The 4-level limit is in the kernel: asus-wmi hardcodes
-`ASUS_EV_MAX_BRIGHTNESS` (3) for the LED's `max_brightness`, the hotkey cycle
-and its clamps. [`asus-wmi-levels/`](asus-wmi-levels) is asus-wmi from Linux
-7.2.9 with one change ([`kbd-max-brightness.patch`](asus-wmi-levels/kbd-max-brightness.patch)):
-a `kbd_max_brightness` module parameter that replaces that constant. The
-default is still 3. `hid-asus` keyboards still get 0-3, scaled from the
-configured range. With both modules installed, the backlight key, the LED class
-device, UPower and GNOME's Quick Settings all use the new levels. With 4 or more
-steps GNOME shows a slider instead of off/low/high buttons.
-
-A second parameter, `kbd_hotkey_levels`, sets which levels the backlight key
-steps through, so the key can stay at a few coarse steps while sliders get
-every level. With `kbd_max_brightness=10 kbd_hotkey_levels=0,1,3,5,10` the
-key cycles off → 1 → 3 → 5 → 10 → off. If the level was set somewhere else,
-e.g. 7 from a slider, the key moves to the nearest listed level (10 going up,
-5 going down). Leave it unset to step through every level.
-
-DKMS only builds it for 7.2.x kernels (`BUILD_EXCLUSIVE_KERNEL`), since the
-source is the 7.2.9 file. On any other kernel the in-tree asus-wmi loads as
-usual and you're back to four levels. The padding means a longer table is
-harmless with stock asus-wmi.
-
-Eleven levels, for example: the dim end of the stock-ish ramp, then five
-steps up to full brightness. The key cycles through five of them:
-
-```
-level  0   1   2   3   4   5    6    7    8    9    10
-duty   0   10  20  40  80  140  165  190  210  235  255
-key    *   *       *       *                         *
-```
-
-The `.conf` files are in `asus-wmi-levels/`:
-
-```bash
-cd Zenbook-Keyboard-brightness-adjust-linux/asus-wmi-levels
-sudo cp -r . /usr/src/asus-wmi-kbd-levels-7.2.9.2
-sudo dkms install asus-wmi-kbd-levels/7.2.9.2
-sudo install -m644 asus-wmi-kbd-levels.depmod.conf  /etc/depmod.d/asus-wmi-kbd-levels.conf
-sudo install -m644 asus-wmi-kbd-levels.modprobe.conf /etc/modprobe.d/asus-wmi-kbd-levels.conf  # kbd_max_brightness=10 kbd_hotkey_levels=0,1,3,5,10
-echo "options asus_kbd_pwkb duty=0,10,20,40,80,140,165,190,210,235,255" | sudo tee /etc/modprobe.d/asus-kbd-pwkb.conf
-sudo depmod -a
-modinfo -n asus_wmi      # should point at .../extra/asus-wmi.ko.xz
-```
-
-Then reboot, or reload the drivers in place:
-
-```bash
-sudo modprobe -r asus_kbd_pwkb asus_armoury asus_nb_wmi asus_wmi
-sudo modprobe asus_nb_wmi && sudo modprobe asus_armoury && sudo modprobe asus_kbd_pwkb
-cat /sys/class/leds/asus::kbd_backlight/max_brightness    # 10
-```
-
-GNOME's power daemon reads the step count once at login, so log out and back in
-(or `systemctl --user restart org.gnome.SettingsDaemon.Power.target`).
-
-`kbd_max_brightness` must be at most the number of `duty` values minus one.
-If it's higher, the extra levels just repeat the last duty value. To go back,
-`sudo dkms remove asus-wmi-kbd-levels/7.2.9.2 --all` and delete the two
-`.conf` files.
-
-## Uninstall
-
-```bash
-sudo rm -f /etc/modules-load.d/asus_kbd_pwkb.conf /etc/modprobe.d/asus-kbd-pwkb.conf
-sudo modprobe -r asus_kbd_pwkb          # restores the original PWKB table
-sudo dkms remove asus-kbd-pwkb/0.3 --all
-```
-
-The MOK stays enrolled; remove it with `sudo mokutil --delete /var/lib/dkms/mok.pub`
-(another reboot into MokManager) if you want it gone.
-
-## How it works
-
-Three ACPICA calls, none of which is gated by lockdown:
-
-1. **`acpi_evaluate_object()` on the `PWKB` Name node** — reads and saves the
-   original 4-byte buffer, so unload can put it back.
-2. **`acpi_load_table()`** with an 89-byte SSDT containing exactly one
-   `DefMethod`, `\_SB.PC00.LPCB.EC0.KPWS(Arg0)`, whose body is:
-   ```asl
-   CopyObject (Arg0, \_SB.PC00.LPCB.EC0.PWKB)
-   Return (Zero)
-   ```
-   This is what sidesteps `LOCKDOWN_ACPI_TABLES`: loading an extra SSDT that
-   adds one new method is not the same thing as overriding an existing ACPI
-   table. (Up to v0.1 this used `acpi_install_method()`, which fails with
-   `AE_BAD_PARAMETER` since ACPICA 20260408 / Linux 7.2.)
-3. **`acpi_evaluate_object()` on `KPWS`** with a Buffer argument — AML
-   `CopyObject` replaces the named `PWKB` object with our values. Then `SLKB(0x80 | level)`
-   is re-issued so the panel updates on the spot.
-
-Everything downstream — `asus-wmi` hotkeys, the LED class device,
-`asus_hotk_resume()`, `hid-asus` — funnels into `SLKB`, which now indexes the
-new table.
-
-Source layout:
-
-| File | |
-|---|---|
-| `asus_kbd_pwkb.c` | the module |
-| `kpws.asl` | source for the injected helper method |
-| `kpws_aml.h` | generated — compiled AML as a C byte array |
-| `mkaml.py` | strips iasl's `If(Zero){External...}` prologue, fixes length + checksum |
-| `Makefile` | kbuild + `make aml` |
-| `dkms.conf` | DKMS packaging |
-| `asus-wmi-levels/` | asus-wmi 7.2.9 + `kbd_max_brightness`/`kbd_hotkey_levels` (DKMS), with the untouched upstream file in `upstream/` |
-| `ca.cnf` | openssl config for the MOK signing cert |
-| `check-compat.sh` | read-only DSDT compatibility checker |
-
-### Regenerating the AML
-
-Only needed if you edit `kpws.asl` (e.g. a different ACPI path):
-
-```bash
-sudo dnf install acpica-tools    # iasl
-make aml                         # rewrites kpws_aml.h
-```
-
-## Caveats
-
-- **Unload restores the table and removes `KPWS`.** The helper SSDT is
-  unloaded with `acpi_unload_table()`, so nothing is left in the namespace.
-- **Nothing changes unless the module loads cleanly.** If `acpi_load_table()`
-  or the `KPWS` call fails, `PWKB` is left as it was.
-- **Very low duty is a hardware question.** Some LED drivers won't strike below
-  a threshold and will flicker or stay dark. That's what the `duty` parameter is
-  for; a bad value costs you an `rmmod`.
-- ACPI paths are model-specific. Verify `PWKB` exists in your DSDT before
-  building.
+**F10 / F12 send F10 / F12 instead.** Fn-lock is on. Press Fn+Esc, or install
+the [fn-keys](fn-keys/README.md) config.
 
 ## License
 

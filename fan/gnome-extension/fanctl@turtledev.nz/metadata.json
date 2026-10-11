@@ -1,0 +1,7 @@
+{
+  "uuid": "fanctl@turtledev.nz",
+  "name": "ASUS Fan Control",
+  "description": "Quick Settings tile for the ASUS fan: live RPM, auto/full speed, firmware fan curve. MyASUS key cycles fan levels with an OSD.",
+  "shell-version": ["50"],
+  "version": 1
+}

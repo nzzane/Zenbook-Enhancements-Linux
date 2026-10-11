@@ -1,0 +1,12 @@
+#!/bin/sh
+# The firmware's S0ix hooks can turn the camera- and mic-key LEDs off on
+# suspend; restore both from the current state.
+[ "$1" = post ] || exit 0
+/usr/local/libexec/camled sync
+# Re-selecting the trigger makes ledtrig-audio re-apply the current mic mute state.
+L=/sys/class/leds/platform::micmute
+if [ "$(sed -n 's/.*\[\(.*\)\].*/\1/p' "$L/trigger")" = audio-micmute ]; then
+    echo none > "$L/trigger"
+    echo audio-micmute > "$L/trigger"
+fi
+exit 0

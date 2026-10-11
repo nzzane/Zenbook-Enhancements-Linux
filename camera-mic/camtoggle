@@ -1,0 +1,63 @@
+#!/bin/bash
+# camtoggle - switch the built-in ASUS FHD webcam (USB 3277:0059) on or off.
+#
+# Toggles the USB device's "authorized" attribute: 0 disconnects the camera
+# entirely, 1 reconnects it. Bound to the F10 camera key (KEY_CAMERA, which
+# GNOME sees as XF86WebCam) via a GNOME custom shortcut.
+#
+# Writing "authorized" requires group write access, granted by
+# /etc/udev/rules.d/99-asus-webcam.rules. Falls back to sudo if that is missing.
+# The off state survives reboots: "off" creates $STATE, and the udev rule
+# deauthorizes the camera at boot while it exists. The F10 key LED follows the
+# camera state via udev (/usr/local/libexec/camled).
+
+set -euo pipefail
+
+DEV=""
+for d in /sys/bus/usb/devices/*; do
+    if [[ "$(cat "$d/idVendor" 2>/dev/null)" == "3277" && "$(cat "$d/idProduct" 2>/dev/null)" == "0059" ]]; then
+        DEV="$d"
+        break
+    fi
+done
+
+if [[ -z "$DEV" ]]; then
+    echo "camtoggle: webcam 3277:0059 not found" >&2
+    exit 1
+fi
+
+AUTH="$DEV/authorized"
+STATE=/var/lib/camtoggle/disabled
+
+write_auth() {
+    if [[ -w "$AUTH" ]]; then
+        echo "$1" > "$AUTH"
+    else
+        echo "$1" | sudo tee "$AUTH" > /dev/null
+    fi
+}
+
+# OSD popup via the camosd@turtledev.nz GNOME extension; notification as fallback.
+notify() {
+    local enabled=$1
+    gdbus call --session --dest org.gnome.Shell --object-path /nz/turtledev/CamOSD \
+        --method nz.turtledev.CamOSD.Show "$enabled" > /dev/null 2>&1 && return 0
+    command -v notify-send > /dev/null || return 0
+    if [[ "$enabled" == true ]]; then
+        notify-send -e -t 1500 -a Camera -i camera-web-symbolic "Camera on" || true
+    else
+        notify-send -e -t 1500 -a Camera -i camera-disabled-symbolic "Camera off" || true
+    fi
+}
+
+status() {
+    if [[ "$(cat "$AUTH")" == "1" ]]; then echo on; else echo off; fi
+}
+
+case "${1:-toggle}" in
+    on)     rm -f "$STATE"; write_auth 1; notify true ;;
+    off)    touch "$STATE"; write_auth 0; notify false ;;
+    toggle) if [[ "$(status)" == "on" ]]; then "$0" off; else "$0" on; fi ;;
+    status) status ;;
+    *)      echo "usage: camtoggle {on|off|toggle|status}" >&2; exit 2 ;;
+esac

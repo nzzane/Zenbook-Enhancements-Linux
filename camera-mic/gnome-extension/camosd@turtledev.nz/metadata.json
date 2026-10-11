@@ -1,0 +1,7 @@
+{
+  "uuid": "camosd@turtledev.nz",
+  "name": "Camera OSD",
+  "description": "Shows the GNOME on-screen display for webcam on/off. camtoggle calls nz.turtledev.CamOSD.Show over D-Bus, since org.gnome.Shell.ShowOSD is restricted.",
+  "shell-version": ["50"],
+  "version": 1
+}

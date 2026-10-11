@@ -1,0 +1,18 @@
+# Allow members of the wheel group to switch the built-in webcam on/off.
+# Writing 0 to the USB device's "authorized" attribute disconnects it
+# (uvcvideo unbinds, /dev/video* disappear); writing 1 reconnects it.
+# Used by /usr/local/bin/camtoggle, bound to the F10 camera key (KEY_CAMERA).
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="3277", ATTR{idProduct}=="0059", \
+  RUN+="/bin/sh -c 'chgrp wheel /sys%p/authorized; chmod 664 /sys%p/authorized'"
+
+# Keep the F10 key LED in sync with the webcam: lit while it is disabled.
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_interface", ENV{PRODUCT}=="3277/59/*", ACTION=="add|remove", \
+  RUN+="/usr/local/libexec/camled sync"
+
+# Keep the webcam off across reboots: camtoggle creates this flag on "off".
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ACTION=="add", ATTR{idVendor}=="3277", ATTR{idProduct}=="0059", \
+  TEST=="/var/lib/camtoggle/disabled", ATTR{authorized}="0"
+# Sync the LED when the webcam appears (at boot the rule above can deauthorize
+# it before any interface events fire).
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ACTION=="add", ATTR{idVendor}=="3277", ATTR{idProduct}=="0059", \
+  RUN+="/usr/local/libexec/camled sync"

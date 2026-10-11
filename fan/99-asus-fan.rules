@@ -1,0 +1,5 @@
+# Allow members of the wheel group to control the ASUS CPU fan mode.
+# asus-wmi exposes pwm1_enable: 0 = full speed, 2 = firmware auto.
+# pwm2_enable ("gpu_fan") returns -EIO on UX5406SA - there is no second fan.
+SUBSYSTEM=="hwmon", KERNEL=="hwmon*", ATTR{name}=="asus", \
+  RUN+="/bin/sh -c 'chgrp wheel /sys%p/pwm1_enable; chmod 664 /sys%p/pwm1_enable'"

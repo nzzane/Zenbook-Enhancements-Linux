@@ -1,0 +1,64 @@
+#!/bin/bash
+# fanctl - switch the ASUS CPU fan between full speed and firmware-controlled auto.
+#
+# The asus-wmi driver exposes only a mode selector, not a PWM duty cycle:
+#   pwm1_enable = 0  full speed
+#   pwm1_enable = 2  firmware automatic curve
+# There is no second fan on the Zenbook S 14 UX5406SA; pwm2_enable returns -EIO.
+#
+# Writing pwm1_enable requires group write access, granted by
+# /etc/udev/rules.d/99-asus-fan.rules. Falls back to sudo if that is missing.
+
+set -euo pipefail
+
+PWM=""
+for h in /sys/devices/platform/asus-nb-wmi/hwmon/hwmon*; do
+    if [[ "$(cat "$h/name" 2>/dev/null)" == "asus" && -e "$h/pwm1_enable" ]]; then
+        PWM="$h/pwm1_enable"
+        RPM="$h/fan1_input"
+        break
+    fi
+done
+
+if [[ -z "$PWM" ]]; then
+    echo "fanctl: no asus hwmon fan control found" >&2
+    exit 1
+fi
+
+write_mode() {
+    if [[ -w "$PWM" ]]; then
+        echo "$1" > "$PWM"
+    else
+        sudo sh -c "echo $1 > $PWM"
+    fi
+}
+
+case "${1:-status}" in
+    max|full|game)
+        write_mode 0
+        echo "fan: full speed"
+        ;;
+    auto|normal|quiet)
+        write_mode 2
+        echo "fan: auto"
+        ;;
+    toggle)
+        if [[ "$(cat "$PWM")" == "0" ]]; then
+            write_mode 2; echo "fan: auto"
+        else
+            write_mode 0; echo "fan: full speed"
+        fi
+        ;;
+    status)
+        case "$(cat "$PWM")" in
+            0) mode="full speed" ;;
+            2) mode="auto" ;;
+            *) mode="unknown ($(cat "$PWM"))" ;;
+        esac
+        echo "fan: $mode, $(cat "$RPM") rpm"
+        ;;
+    *)
+        echo "usage: fanctl {max|auto|toggle|status}" >&2
+        exit 2
+        ;;
+esac

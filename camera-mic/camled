@@ -1,0 +1,45 @@
+#!/bin/bash
+# camled - drive the LED on the F10 camera key of the ASUS Zenbook S 14 UX5406SA.
+#
+# The firmware wires the LED to GPIO pad GPP_H_5 (ACPI pad 0x00180885, pin 31 of
+# pinctrl INTC105D:02), active low: 0 = lit, 1 = off. The mic LED next to it is
+# GPP_H_4 (asus-wmi platform::micmute). asus-wmi has no camera LED for this model:
+# its WMI device 0x00060078 only acts once per boot (FSIS gate in the DSDT).
+#
+# Lit means the webcam is disabled (USB authorized=0, see camtoggle), like mic mute.
+#   camled on|off   force the LED
+#   camled sync     set it from the webcam state
+# Run as root, from /etc/udev/rules.d/99-asus-webcam.rules and the system-sleep hook.
+
+set -euo pipefail
+
+CHIP=""
+for c in /sys/bus/gpio/devices/gpiochip*; do
+    if [[ "$(basename "$(readlink -f "$c/..")")" == "INTC105D:02" ]]; then
+        CHIP="$(basename "$c")"
+        break
+    fi
+done
+[[ -n "$CHIP" ]] || { echo "camled: INTC105D:02 gpiochip not found" >&2; exit 1; }
+
+set_led() {
+    gpioset -c "$CHIP" -t0 31="$1"
+}
+
+webcam_enabled() {
+    local d
+    for d in /sys/bus/usb/devices/*; do
+        if [[ "$(cat "$d/idVendor" 2>/dev/null)" == "3277" && "$(cat "$d/idProduct" 2>/dev/null)" == "0059" ]]; then
+            [[ "$(cat "$d/authorized")" == "1" ]]
+            return
+        fi
+    done
+    return 1
+}
+
+case "${1:-sync}" in
+    on)   set_led 0 ;;
+    off)  set_led 1 ;;
+    sync) if webcam_enabled; then set_led 1; else set_led 0; fi ;;
+    *)    echo "usage: camled {on|off|sync}" >&2; exit 2 ;;
+esac
